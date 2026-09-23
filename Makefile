@@ -7,8 +7,6 @@ INSTALL_TARGET_PROCESSES = Bootstrap
 
 THEOS_PACKAGE_SCHEME = roothide
 
-THEOS_DEVICE_IP = iphone13.local
-
 #disable theos auto sign for all mach-o
 TARGET_CODESIGN = echo "don't sign"
 
@@ -33,14 +31,14 @@ clean::
 
 before-package::
 	rm -rf ./packages
-	cp -a ./strapfiles ./.theos/_/Applications/Bootstrap.app/
-	ldid -Sentitlements.plist ./.theos/_/Applications/Bootstrap.app/Bootstrap
+	cp -a ./strapfiles $(THEOS_STAGING_DIR)/Applications/Bootstrap.app/
+	ldid -Sentitlements.plist $(THEOS_STAGING_DIR)/Applications/Bootstrap.app/Bootstrap
 	mkdir -p ./packages/Payload
-	cp -R ./.theos/_/Applications/Bootstrap.app ./packages/Payload
+	cp -R $(THEOS_STAGING_DIR)/Applications/Bootstrap.app ./packages/Payload
 	cd ./packages && zip -mry ./Bootstrap.tipa ./Payload
-	rm -rf ./.theos/_/Applications
-	mkdir ./.theos/_/tmp
-	cp ./packages/Bootstrap.tipa ./.theos/_/tmp/
+	rm -rf $(THEOS_STAGING_DIR)/Applications
+	mkdir $(THEOS_STAGING_DIR)/tmp
+	cp ./packages/Bootstrap.tipa $(THEOS_STAGING_DIR)/tmp/
 
 after-install::
 	install.exec 'uiopen -b com.roothide.Bootstrap'

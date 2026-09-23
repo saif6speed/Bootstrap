@@ -2,20 +2,10 @@
 
 #import "AppViewController.h"
 #include "AppDelegate.h"
-#import "AppList.h"
+#import "AppInfo.h"
 #include "common.h"
 #include "AppDelegate.h"
 #include <sys/stat.h>
-
-@interface PrivateApi_LSApplicationWorkspace
-- (NSArray*)allInstalledApplications;
-- (BOOL)openApplicationWithBundleID:(id)arg1;
-- (NSArray*)privateURLSchemes;
-- (NSArray*)publicURLSchemes;
-- (BOOL)_LSPrivateRebuildApplicationDatabasesForSystemApps:(BOOL)arg1
-                                                  internal:(BOOL)arg2
-                                                      user:(BOOL)arg3;
-@end
 
 @interface AppViewController () {
     UISearchController *searchController;
@@ -54,7 +44,7 @@
         isFiltered = true;
         filteredApps = [[NSMutableArray alloc] init];
         searchText = searchText.lowercaseString;
-        for (AppList* app in appsArray) {
+        for (AppInfo* app in appsArray) {
             NSRange nameRange = [app.name.lowercaseString rangeOfString:searchText options:NSCaseInsensitiveSearch];
             NSRange bundleIdRange = [app.bundleIdentifier.lowercaseString rangeOfString:searchText options:NSCaseInsensitiveSearch];
             if(nameRange.location != NSNotFound || bundleIdRange.location != NSNotFound) {
@@ -76,7 +66,7 @@
     self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
     self.tableView.tableFooterView = [[UIView alloc] init];
     
-    [self setTitle:Localized(@"Tweak Enabler")];
+    [self setTitle:Localized(@"Enable Tweak for App")];
     
     isFiltered = false;
     
@@ -90,35 +80,33 @@
     
     UIRefreshControl *refreshControl = [[UIRefreshControl alloc] init];
     refreshControl.tintColor = [UIColor grayColor];
-    [refreshControl addTarget:self action:@selector(startRefresh) forControlEvents:UIControlEventValueChanged];
+    [refreshControl addTarget:self action:@selector(manualRefresh) forControlEvents:UIControlEventValueChanged];
     self.tableView.refreshControl = refreshControl;
     
     [self updateData:YES];
     
     [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(startRefresh2)
+                                             selector:@selector(autoRefresh)
                                           name:UIApplicationWillEnterForegroundNotification
                                                object:nil];
 }
 
-- (void)startRefresh {
+- (void)startRefresh:(BOOL)resort {
     [self.tableView.refreshControl beginRefreshing];
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        [self updateData:YES];
+        [self updateData:resort];
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.tableView.refreshControl endRefreshing];
         });
     });
 }
 
-- (void)startRefresh2 {
-    [self.tableView.refreshControl beginRefreshing];
-    dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        [self updateData:NO];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.tableView.refreshControl endRefreshing];
-        });
-    });
+- (void)manualRefresh {
+    [self startRefresh:YES];
+}
+
+- (void)autoRefresh {
+    [self startRefresh:NO];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -127,13 +115,24 @@
     [self.tableView.refreshControl endRefreshing];
 }
 
--(BOOL)tweakEnabled:(AppList*)app {
+-(BOOL)tweakEnabled:(AppInfo*)app {
     struct stat st;
     if(lstat([app.bundleURL.path stringByAppendingPathComponent:@".jbroot"].fileSystemRepresentation, &st)==0) {
         return YES;
     }
     
-    if(!isDefaultInstallationPath(app.bundleURL.path)) {
+    if(launchd_exploit_available())
+    {
+        if([app.bundleURL.path hasPrefix:@"/Applications/"] && [NSFileManager.defaultManager fileExistsAtPath:jbroot(app.bundleURL.path)]) {
+            return YES;
+        }
+        
+        if([NSFileManager.defaultManager fileExistsAtPath:jbroot([@"/.sysroot/" stringByAppendingString:app.bundleURL.path])]) {
+            return YES;
+        }
+    }
+    
+    if(!isRemovableBundlePath(app.bundleURL.path.fileSystemRepresentation)) {
         return NO;
     }
     
@@ -151,16 +150,15 @@
 
 - (void)updateData:(BOOL)sort {
     NSMutableArray* applications = [NSMutableArray new];
-    PrivateApi_LSApplicationWorkspace* _workspace = [NSClassFromString(@"LSApplicationWorkspace") new];
-    NSArray* allInstalledApplications = [_workspace allInstalledApplications];
+    NSArray* allInstalledApplications = [LSApplicationWorkspace.defaultWorkspace allInstalledApplications];
 
     for(id proxy in allInstalledApplications)
     {
-        AppList* app = [AppList appWithPrivateProxy:proxy];
+        AppInfo* app = [AppInfo appWithPrivateProxy:proxy];
     
 //        if(app.isHiddenApp) continue;
                 
-        if(![app.bundleURL.path hasPrefix:@"/Applications/"] && !isDefaultInstallationPath(app.bundleURL.path)) {
+        if(![app.bundleURL.path hasPrefix:@"/Applications/"] && !isRemovableBundlePath(app.bundleURL.path.fileSystemRepresentation)) {
             //sysapp installed as jailbreak apps
             NSString* sysPath = [@"/Applications/" stringByAppendingPathComponent:app.bundleURL.path.lastPathComponent];
             if(![NSFileManager.defaultManager fileExistsAtPath:sysPath])
@@ -174,7 +172,7 @@
         }
         
         if([NSFileManager.defaultManager fileExistsAtPath:
-            [app.bundleURL.path stringByAppendingString:@"/.TrollStorePresistenceHelper"]])
+            [app.bundleURL.path stringByAppendingString:@"/.TrollStorePersistenceHelper"]])
                 continue;
         
         if([NSFileManager.defaultManager fileExistsAtPath:
@@ -196,17 +194,23 @@
     
     if(sort)
     {
-        NSArray *appsSortedByName = [applications sortedArrayUsingComparator:^NSComparisonResult(AppList *app1, AppList *app2) {
+        NSArray *appsSortedByName = [applications sortedArrayUsingComparator:^NSComparisonResult(AppInfo *app1, AppInfo *app2) {
 
             BOOL enabled1 = [self tweakEnabled:app1];
             BOOL enabled2 = [self tweakEnabled:app2];
+            BOOL isApple1 = [app1.bundleIdentifier hasPrefix:@"com.apple."];
+            BOOL isApple2 = [app2.bundleIdentifier hasPrefix:@"com.apple."];
             
-            if((enabled1&&!enabled2) || (!enabled1&&enabled2)) {
+            if(enabled1 != enabled2) {
                 return [@(enabled2) compare:@(enabled1)];
             }
             
-            if(app1.isHiddenApp || app2.isHiddenApp) {
-                return (enabled1&&enabled2) ? [@(app2.isHiddenApp) compare:@(app1.isHiddenApp)] : [@(app1.isHiddenApp) compare:@(app2.isHiddenApp)];
+            if(app1.isHiddenApp != app2.isHiddenApp) {
+                return [@(app1.isHiddenApp) compare:@(app2.isHiddenApp)];
+            }
+            
+            if(isApple1 != isApple2) {
+                return [@(isApple1) compare:@(isApple2)];
             }
             
             return [app1.name localizedStandardCompare:app2.name];
@@ -217,9 +221,9 @@
     else
     {
         NSMutableArray *newapps = [NSMutableArray array];
-        [applications enumerateObjectsUsingBlock:^(AppList *newobj, NSUInteger idx, BOOL * _Nonnull stop) {
+        [applications enumerateObjectsUsingBlock:^(AppInfo *newobj, NSUInteger idx, BOOL * _Nonnull stop) {
             __block BOOL hasBeenContained = NO;
-            [self->appsArray enumerateObjectsUsingBlock:^(AppList *obj, NSUInteger idx, BOOL * _Nonnull stop) {
+            [self->appsArray enumerateObjectsUsingBlock:^(AppInfo *obj, NSUInteger idx, BOOL * _Nonnull stop) {
                 if ([obj.bundleIdentifier isEqualToString:newobj.bundleIdentifier]) {
                     hasBeenContained = YES;
                     *stop = YES;
@@ -231,8 +235,8 @@
         }];
         
         NSMutableArray *tmpArray = [NSMutableArray array];
-        [self->appsArray enumerateObjectsUsingBlock:^(AppList *obj, NSUInteger idx, BOOL * _Nonnull stop) {
-            [applications enumerateObjectsUsingBlock:^(AppList *newobj, NSUInteger idx, BOOL * _Nonnull stop) {
+        [self->appsArray enumerateObjectsUsingBlock:^(AppInfo *obj, NSUInteger idx, BOOL * _Nonnull stop) {
+            [applications enumerateObjectsUsingBlock:^(AppInfo *newobj, NSUInteger idx, BOOL * _Nonnull stop) {
                 if ([obj.bundleIdentifier isEqualToString:newobj.bundleIdentifier]) {
                     [tmpArray addObject:newobj];
                     *stop = YES;
@@ -291,7 +295,7 @@ NSArray* unsupportedBundleIDs = @[
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"Cell"];
     
-    AppList* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
+    AppInfo* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
     
     if(!app.isHiddenApp) {
         UIImage *image = app.icon;
@@ -327,28 +331,55 @@ NSArray* unsupportedBundleIDs = @[
     UISwitch *switchInCell = (UISwitch *)sender;
     CGPoint pos = [switchInCell convertPoint:switchInCell.bounds.origin toView:self.tableView];
     NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:pos];
+    
+    AppInfo* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
+    
     BOOL enabled = switchInCell.on;
-    AppList* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
+    
+    if(enabled && isBlacklistedApp(app.bundleIdentifier.UTF8String)) {
+        [AppDelegate showMesage:Localized(@"This app is blacklisted by RootHide Manager, please unblacklist it first.") title:@""];
+        [switchInCell setOn:NO];
+        return;
+    }
+    
+    if(![NSFileManager.defaultManager fileExistsAtPath:app.bundleURL.path]) {
+        NSString* msg = [NSString stringWithFormat:@"%@\n\n%@",
+                         Localized(@"App bundle does not exist, try Bootstrap->[settings]->[rebuild icon cache] to fix it."),
+                         app.bundleURL.path];
+        [AppDelegate showMesage:msg title:Localized(@"Error")];
+        [switchInCell setOn:!enabled];
+        return;
+    }
+    
+    if([app.bundleURL.path hasPrefix:@"/Applications/"])
+    {
+        NSString* resignedBundlePath = [jbroot(@"/.sysroot") stringByAppendingPathComponent:app.bundleURL.path];
+        if([NSFileManager.defaultManager fileExistsAtPath:resignedBundlePath])
+        {
+            NSString* InfoPlistPath = [resignedBundlePath stringByAppendingPathComponent:@"Info.plist"];
+            
+            struct stat st={0};
+            if(lstat(InfoPlistPath.fileSystemRepresentation, &st)!=0 || S_ISLNK(st.st_mode)) {
+                [AppDelegate showMesage:Localized(@"This app's injection is hosted by Bootstrap now, you don't have to deal with it.") title:@""];
+                [switchInCell setOn:!enabled];
+                return;
+            }
+        }
+    }
 
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
         [AppDelegate showHudMsg:Localized(@"Applying")];
         
-        killAllForApp(app.bundleURL.path.UTF8String);
+        killAllForBundle(app.bundleURL.path.fileSystemRepresentation);
         
-        int status;
         NSString* log=nil;
         NSString* err=nil;
-        if(enabled) {
-            status = spawnRoot(NSBundle.mainBundle.executablePath, @[@"enableapp",app.bundleURL.path], &log, &err);
-        } else {
-            status = spawnRoot(NSBundle.mainBundle.executablePath, @[@"disableapp",app.bundleURL.path], &log, &err);
-        }
-        
+        int status = spawn_root(NSBundle.mainBundle.executablePath, @[enabled ? @"enableapp" : @"disableapp",app.bundleURL.path], &log, &err);
         if(status != 0) {
             [AppDelegate showMesage:[NSString stringWithFormat:@"%@\nstderr:\n%@",log,err] title:[NSString stringWithFormat:@"error(%d)",status]];
         }
         
-        killAllForApp(app.bundleURL.path.UTF8String);
+        killAllForBundle(app.bundleURL.path.fileSystemRepresentation);
         
         //refresh app cache list
         [self updateData:NO];
@@ -365,11 +396,10 @@ NSArray* unsupportedBundleIDs = @[
         long tag = recognizer.view.tag;
         NSIndexPath* indexPath = [NSIndexPath indexPathForRow:tag&0xFFFFFFFF inSection:tag>>32];
         
-        AppList* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
+        AppInfo* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
 
         dispatch_async(dispatch_get_global_queue(0, 0), ^{
-            PrivateApi_LSApplicationWorkspace* _workspace = [NSClassFromString(@"LSApplicationWorkspace") new];
-            [_workspace openApplicationWithBundleID:app.bundleIdentifier];
+            [LSApplicationWorkspace.defaultWorkspace openApplicationWithBundleID:app.bundleIdentifier];
         });
     }
 }

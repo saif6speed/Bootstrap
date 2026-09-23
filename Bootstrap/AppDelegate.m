@@ -8,23 +8,10 @@
 
 @implementation AppDelegate
 
-UITextView* logView=nil;
-
-+ (void)registerLogView:(UITextView*)view
-{
-    dispatch_async(dispatch_get_main_queue(), ^{
-        logView = view;
-        logView.layoutManager.allowsNonContiguousLayout = NO;
-    });
-}
-
 + (void)addLogText:(NSString*)text
 {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [logView setText:[logView.text stringByAppendingString:[NSString stringWithFormat:@"%@\n",text]]];
-        if(logView.contentSize.height >= logView.bounds.size.height)
-            [logView setContentOffset:CGPointMake(0, logView.contentSize.height - logView.bounds.size.height) animated:YES];
-    });
+    SYSLOG("addLogText: %@", text);
+    [NSNotificationCenter.defaultCenter postNotificationName:@"LogMsgNotification" object:text];
 }
 
 MBProgressHUD *switchHud=nil;
@@ -64,22 +51,32 @@ MBProgressHUD *switchHud=nil;
     });
     
     dispatch_async(alertQueue, ^{
+        __block BOOL presenting = NO;
         __block BOOL presented = NO;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIViewController* vc = UIApplication.sharedApplication.keyWindow.rootViewController;
-            while(vc.presentedViewController) vc = vc.presentedViewController;
-            [vc presentViewController:alert animated:YES completion:^{ presented=YES; }];
-        });
-        
+        while(!presenting) {
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                UIViewController* vc = UIApplication.sharedApplication.keyWindow.rootViewController;
+                while(vc.presentedViewController){
+                    vc = vc.presentedViewController;
+                    if(vc.isBeingDismissed) {
+                        return;
+                    }
+                }
+                presenting = YES;
+                [vc presentViewController:alert animated:YES completion:^{ presented=YES; }];
+            });
+            if(!presenting) usleep(1000*100);
+        }
         while(!presented) usleep(100*1000);
     });
 }
 
 + (void)showMesage:(NSString*)msg title:(NSString*)title {
-    
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:Localized(@"OK") style:UIAlertActionStyleDefault handler:nil]];
-    [self showAlert:alert];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert]; //may crash if on non-main thread
+        [alert addAction:[UIAlertAction actionWithTitle:Localized(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+        [self showAlert:alert];
+    });
 }
 
 

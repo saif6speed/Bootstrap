@@ -1,9 +1,8 @@
 .theos/
 packages/
 .DS_Store
-/basebin/
 /layout/
-*.xcuserstate
-Bootstrap.xcodeproj/project.xcworkspace/xcuserdata/admin.xcuserdatad/UserInterfaceState.xcuserstate
-Bootstrap.xcodeproj/project.xcworkspace/xcuserdata/admin.xcuserdatad/UserInterfaceState.xcuserstate
-*.xcuserstate
+.vscode/
+/Bootstrap/basebin
+/Bootstrap.xcodeproj/project.xcworkspace/xcuserdata
+/sandbox-profiles
